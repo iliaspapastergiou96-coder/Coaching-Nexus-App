@@ -5,446 +5,480 @@ import datetime
 import urllib.parse
 import streamlit.components.v1 as components
 
+# Προσπάθεια εισαγωγής της βιβλιοθήκης του Gemini
+try:
+    import google.generativeai as genai
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+
 # --- CONFIG & SYSTEM MEMORY ---
-st.set_page_config(page_title="Nexus Pro | Management OS", layout="wide")
+st.set_page_config(page_title="Nexus Pro | Management OS", layout="wide", initial_sidebar_state="expanded")
 
 if 'coaching_history' not in st.session_state: st.session_state['coaching_history'] = []
 if 'custom_roots' not in st.session_state: st.session_state['custom_roots'] = []
 if 'custom_actions' not in st.session_state: st.session_state['custom_actions'] = []
-if 'my_team' not in st.session_state: st.session_state['my_team'] = ["Nick Kalas", "Maria S."]
 if 'num_whys' not in st.session_state: st.session_state['num_whys'] = 1
+if 'teams' not in st.session_state: st.session_state['teams'] = {"Alpha Team": ["Nick Kalas", "Maria S."]}
+if 'active_team' not in st.session_state: st.session_state['active_team'] = None
+if 'page' not in st.session_state: st.session_state['page'] = "Home"
+if 'language' not in st.session_state: st.session_state['language'] = "English 🇬🇧"
+if 'ai_chat_history' not in st.session_state: st.session_state['ai_chat_history'] = []
+if 'gemini_api_key' not in st.session_state: st.session_state['gemini_api_key'] = ""
 
-# AI MAPPING: Root Causes -> Προτεινόμενα Action Plans
+# AI MAPPING: Expanded BPO-Specific Root Causes -> Action Plans
 rc_action_map = {
-    "Product Knowledge / Skill Gap": ["Review Knowledge Base (KB) Article", "Complete Training Module", "Roleplay Scenario"],
-    "System Latency / Tech Issues": ["Raise IT Helpdesk Ticket", "Teach Keyboard Shortcuts", "Clear Cache/Cookies Workflow"],
-    "Burnout / Mental Fatigue": ["Schedule Wellbeing Check-in", "Review PTO / Vacation Accrual", "Workload Rebalance"],
-    "Process Confusion": ["Side-by-Side Shadowing", "Review Standard Operating Procedure (SOP)"],
-    "AHT Pressure (Handling Time)": ["Call Control Coaching", "Shadow High Performer", "Hold-time Best Practices"],
-    "Missed QA Verification (Fatal)": ["Compliance & Security Refresher", "Sticky Note Reminder on Monitor"],
-    "Lack of Empathy / Tone of Voice": ["Soft Skills Workshop", "Empathy Phrasing Practice", "Listen to 'Golden Calls'"]
+    "Product Knowledge Gap (e.g. Policies, Refunds)": ["Review KB Article", "Complete LMS Module", "Quiz on Policies"],
+    "System Latency / Inefficient Navigation": ["Teach Keyboard Shortcuts", "Optimize Browser/Cache", "Dual Monitor Setup Training"],
+    "Burnout / Mental Fatigue / Low Motivation": ["Schedule Wellbeing Check-in", "Review PTO Accrual", "Assign 'Easy' Queue temporarily"],
+    "Process Confusion (SOP not followed)": ["Side-by-Side Shadowing", "Print & Highlight SOP", "Process Walkthrough"],
+    "AHT Pressure (Dead air, long holds)": ["Call Control Coaching", "Hold-time Best Practices", "Shadow Low-AHT Performer"],
+    "Missed QA Verification (Security/GDPR)": ["Compliance Refresher", "Sticky Note Reminder on Monitor", "Zero Tolerance Policy Review"],
+    "Lack of Empathy / Tone of Voice": ["Soft Skills Workshop", "Empathy Phrasing Practice", "Listen to 'Golden Calls'"],
+    "Ineffective Probing / Issue Identification": ["Active Listening Exercises", "Roleplay Discovery Questions", "Call Recording Review"],
+    "Language / Communication Barriers": ["Scripting Assistance", "Grammar/Vocab Resource Link", "Peer-to-Peer Language Buddy"]
 }
 
-# --- 4-LANGUAGE DICTIONARY (100% FULL UI TRANSLATION + TOOLTIPS) ---
+# PRE-DEFINED S.M.A.R.T. OPTIONS
+opt_specific = ["-- Custom --", "Reduce AHT on complex bookings/cancellations", "Improve CSAT by showing genuine empathy", "Increase FCR (First Contact Resolution)", "Eliminate Auto-Fail/Fatal QA errors (e.g. GDPR)", "Improve Schedule Adherence & minimize Shrinkage", "Improve probing skills to identify root issues"]
+opt_measurable = ["-- Custom --", "Decrease AHT by 30-45 seconds", "Achieve >= 90% CSAT for the week", "Score 100% on Compliance QA", "Maintain 95%+ Schedule Adherence", "Resolve 8/10 calls without escalation"]
+opt_achievable = ["-- Custom --", "By shadowing a top performer for 1 hour", "By using the new macro templates", "By keeping the KB open on the second monitor", "By practicing call control techniques", "By taking a 15-min daily mental break"]
+opt_relevant = ["-- Custom --", "Aligns with department goal to reduce customer wait times", "Directly improves Customer Loyalty & NPS", "Ensures legal/security compliance", "Reduces team workload and callback volume", "Helps agent achieve monthly performance bonus"]
+opt_timebound = ["-- Custom --", "By the end of the week (Friday)", "Within the next 14 days", "By the end of the current month", "Starting next shift", "Over the next 30 days"]
+
 lang_dict = {
     "Ελληνικά 🇬🇷": {
-        "title": "Nexus Pro | Performance & Coaching OS", "subtitle": "Σύστημα Διαχείρισης Απόδοσης & Ανάπτυξης Προσωπικού",
-        "team_mgmt": "👥 Η Ομάδα Μου (My Team)", "add_agent": "Προσθήκη Agent", "add_btn": "➕ Προσθήκη", "sel_agent": "👤 Ενεργός Agent", "rem_btn": "❌ Διαγραφή",
-        "settings": "🏢 Ρυθμίσεις Συστήματος", "proj": "Project / Καμπάνια", "model": "Μοντέλο Εργασίας", "loc": "Τοποθεσία", "date": "Ημερομηνία", "duration": "Διάρκεια",
-        "targets": "🎯 Στόχοι Εταιρείας (KPIs)", "timer": "Χρονόμετρο Συνεδρίας", "start": "▶ Έναρξη", "stop": "⏹ Παύση",
-        "hierarchy": "1. Διοικητική Ομάδα", "coach": "Coach / Team Leader", "qa_eval": "QA Evaluator",
-        "exp1": "2. Προφίλ & Αναλυτικά Στοιχεία Agent", "avatar": "Εικόνα Προφίλ", "male": "Άνδρας", "female": "Γυναίκα", "upload": "Ανέβασμα",
-        "name": "Ονοματεπώνυμο Agent", "email": "Εταιρικό Email", "tenure": "Εμπειρία (Tenure)", "langs": "Γλώσσες Εργασίας",
-        "behavior": "Behavioral Profile (Ψυχολογία)", "prim_p": "Κύριος Τύπος", "sec_p": "Δευτερεύων Τύπος", "ai_insight": "🧠 AI Οδηγία", "flight": "Πρόβλεψη Ρίσκου Παραίτησης",
-        "exp2": "3. Αξιολόγηση Ποιότητας (QA)", "qa_score": "Σκορ QA (%)", "qa_notes": "Σχόλια QA / Στόχοι",
-        "tab1": "Μετρικές (KPIs)", "tab2": "Ανάλυση Αιτιών (5 Whys)", "tab3": "S.M.A.R.T. & Action Plan", "tab4": "Αναγνώριση & Συμμόρφωση", "tab5": "Ιστορικό & Email",
-        "week": "Εβδομάδα", "mtd_vs_tgt": "MTD vs Στόχος", "chart_type": "Είδος Γραφήματος",
-        "rc_ident": "Αναγνώριση Αιτίας (Root Cause)", "add_why": "Προσθήκη Why", "pri_rc": "Κύρια Αιτία (Primary):", "sec_rc": "Δευτερεύουσα Αιτία (Secondary):", "def_rc": "Γράψε Νέα Αιτία:",
-        "smart_title": "📝 Στοχοθεσία S.M.A.R.T.", "s_s": "Specific (Συγκεκριμένος)", "s_m": "Measurable (Μετρήσιμος)", "s_a": "Achievable (Εφικτός)", "s_r": "Relevant (Σχετικός)", "s_t": "Time-bound (Χρόνος)",
-        "ap_title": "🛠️ Πλάνο Δράσης (Action Plan)", "strat_ap": "Στρατηγική Ενέργεια:", "def_ap": "Γράψε Νέα Ενέργεια:", "deadline": "Προθεσμία:",
-        "kudos_title": "🏆 Αναγνώριση (Kudos)", "kudos_btn": "Δημιουργία Μηνύματος", "comp_title": "⚠️ Συμμόρφωση & Πειθαρχικά", "flag_out": "Ενεργοποίηση Πειθαρχικού", "comp_action": "Ενέργεια Συμμόρφωσης",
-        "sign_title": "📝 Έλεγχος & Ψηφιακή Υπογραφή", "sign_text": "Ο/Η Agent κατανοεί και συμφωνεί με το Action Plan.", "initials": "Αρχικά Agent",
-        "save_btn": "📥 ΑΠΟΘΗΚΕΥΣΗ SESSION", "err_sign": "❌ Απαιτείται υπογραφή και συγκατάθεση για αποθήκευση.", "succ_save": "✅ Η συνεδρία αποθηκεύτηκε επιτυχώς!",
-        "hist_ag": "👤 Ιστορικό Coaching για:", "db_team": "🏢 Πλήρης Βάση Δεδομένων", "export_btn": "📥 Εξαγωγή Ολικής Βάσης", "db_mgmt": "🗑️ Διαχείριση Βάσης", "del_all": "🚨 Διαγραφή Όλου του Ιστορικού", "del_sel": "❌ Διαγραφή Επιλεγμένου", "sel_del": "Επίλεξε συνεδρία για διαγραφή:",
-        "email_gen": "✉️ Δημιουργία Επίσημου Email", "sel_sess": "Επίλεξε Συνεδρία προς Αποστολή:", "prev_email": "👀 Προεπισκόπηση Αναφοράς", "send_btn": "✉️ Αποστολή μέσω Outlook / Gmail",
-        "tt_red": "Αποφασιστικός, γρήγορος, εστιάζει στο αποτέλεσμα. Απεχθάνεται το micromanagement.", "tt_yellow": "Κοινωνικός, ενθουσιώδης. Θέλει αναγνώριση. Προσοχή στο AHT.", "tt_green": "Ήρεμος, υπομονετικός. Απεχθάνεται την πίεση. Κίνδυνος burnout.", "tt_blue": "Αναλυτικός, ακριβής. Απαιτεί δεδομένα. Τον ενοχλεί η φασαρία.",
-        "email_subject": "Επίσημη Ανασκόπηση Coaching - {}",
-        "email_body": "Αγαπητέ/ή {},\n\nΣε ευχαριστώ πολύ για τη σημερινή μας συνεδρία.\n\n[1. ΑΠΟΔΟΣΗ & ΜΕΤΡΙΚΕΣ]\n- Στόχος CSAT: {}% | Τρέχον: {}%\n- Στόχος QA: {}% | Τρέχον: {}\n\n[2. ΑΝΑΛΥΣΗ ΑΙΤΙΩΝ]\n- Κύρια Αιτία: {}\n- Δευτερεύουσα Αιτία: {}\n\n[3. S.M.A.R.T. ΣΤΟΧΟΙ & ACTION PLAN]\n- Specific: {}\n- Measurable: {}\n- Achievable: {}\n- Relevant: {}\n- Time-bound: {}\n- Επίσημο Action Plan: {}\n\nΠαρακαλώ όπως απαντήσεις επιβεβαιώνοντας ότι αποδέχεσαι το πλάνο.\n\nΜε εκτίμηση,\n{}"
+        "home_desc": "Δημιουργήστε νέες ομάδες ή επιλέξτε μια υπάρχουσα.",
+        "create_team": "➕ Νέα Ομάδα", "enter_team_sec": "🏢 Είσοδος σε Ομάδα", "team_name_ph": "Όνομα...", "create_btn": "Δημιουργία", "enter_btn": "Είσοδος στο Workspace", "select_team": "Επιλέξτε:",
+        "back_home": "🏠 Αλλαγή Ομάδας", "team_mgmt": "👥 Ρόστερ", "add_agent": "Προσθήκη", "add_btn": "➕", "sel_agent": "Ενεργός Agent", "rem_btn": "❌ Διαγραφή",
+        "ws_menu": ["📝 Νέο Coaching", "🗂️ Ιστορικό Agent", "📈 KPI Review", "⚙️ Other Actions"],
+        "c_type_label": "Τύπος Συνεδρίας:", "c_date_label": "Ημερομηνία Coaching:",
+        "ctype_case": "🎯 Specific Case / Interaction", "ctype_weekly": "📅 Weekly Coaching", "ctype_monthly": "📊 Monthly Review", "ctype_quarterly": "📈 Quarterly Review",
+        "call_id": "Call / Ticket ID (Προαιρετικό)", "rebuttal": "Αυτοαξιολόγηση Agent / Σχόλια", "assign_lms": "📚 Ανάθεση Micro-learning", "pip_gen": "⚠️ Δημιουργία P.I.P.",
+        "adherence": "⏱️ Έλεγχος Adherence & Shrinkage", "extract_ag": "📥 Εξαγωγή Agent Data", "disc_action": "⚖️ Πειθαρχική Ενέργεια",
+        "time_filter": "Φίλτρο Χρόνου", "tf_opts": ["Last Week", "Last Month", "Last Quarter", "Last Year"],
+        "tab1": "📊 1. Μετρικές & KPIs", "tab2": "🔍 Ανάλυση Αιτιών (5 Whys)", "tab3": "📝 S.M.A.R.T. & Action Plan", "tab4": "✍️ Έλεγχος & Υπογραφές",
+        "add_why": "Προσθήκη Why", "rem_why": "Αφαίρεση Why",
+        "save_btn": "📥 ΑΠΟΘΗΚΕΥΣΗ SESSION",
+        "ai_title": "🤖 Gemini AI Assistant", "ai_ph": "Π.χ. Δώσε μου 3 tips για το AHT...", "ai_btn": "Αποστολή 🚀",
+        "chart_sel": "Τύπος Γραφήματος:", "chart_opts": ["📉 Trend Line (Εξέλιξη)", "📊 Bar Chart (Ραβδόγραμμα)", "🌊 Area Chart (Εμβαδού)", "🥧 Pie Chart (Κατανομή Αιτιών)"]
     },
     "English 🇬🇧": {
-        "title": "Nexus Pro | Performance & Coaching OS", "subtitle": "Enterprise Performance Management & Staff Development",
-        "team_mgmt": "👥 My Team Management", "add_agent": "Add New Agent", "add_btn": "➕ Add", "sel_agent": "👤 Select Active Agent", "rem_btn": "❌ Remove",
-        "settings": "🏢 System Settings", "proj": "Project / Campaign", "model": "Work Model", "loc": "Location", "date": "Session Date", "duration": "Duration",
-        "targets": "🎯 Corporate Targets (KPIs)", "timer": "Live Session Timer", "start": "▶ Start", "stop": "⏹ Stop",
-        "hierarchy": "1. Leadership & Management", "coach": "Coach / Team Leader", "qa_eval": "QA Evaluator",
-        "exp1": "2. Agent Profile & Behavioral Analytics", "avatar": "Profile Image", "male": "Male", "female": "Female", "upload": "Upload",
-        "name": "Agent Full Name", "email": "Corporate Email", "tenure": "Tenure Level", "langs": "Working Languages",
-        "behavior": "Behavioral Profile", "prim_p": "Primary Personality", "sec_p": "Secondary Personality", "ai_insight": "🧠 AI Management Insight", "flight": "Retention AI Forecast",
-        "exp2": "3. Career Development & QA", "qa_score": "Overall QA Score (%)", "qa_notes": "QA Feedback / Goals",
-        "tab1": "Metrics (KPIs)", "tab2": "Root Causes & 5 Whys", "tab3": "S.M.A.R.T. & Action Plan", "tab4": "Recognition & Compliance", "tab5": "History & Email",
-        "week": "Week", "mtd_vs_tgt": "MTD vs Target", "chart_type": "Visualization",
-        "rc_ident": "Root Cause Identification", "add_why": "Add Why", "pri_rc": "Primary Root Cause:", "sec_rc": "Secondary Root Cause:", "def_rc": "Define Custom Cause:",
-        "smart_title": "📝 S.M.A.R.T. Target Setting", "s_s": "Specific", "s_m": "Measurable", "s_a": "Achievable", "s_r": "Relevant", "s_t": "Time-bound",
-        "ap_title": "🛠️ Action Plan Assignment", "strat_ap": "Strategic Action Plan:", "def_ap": "Define Custom Action:", "deadline": "Target Deadline:",
-        "kudos_title": "🏆 Recognition (Kudos)", "kudos_btn": "Generate Recognition Note", "comp_title": "⚠️ Compliance & Discipline", "flag_out": "Flag for Disciplinary Review", "comp_action": "Compliance Action",
-        "sign_title": "📝 Manager Review & Digital Sign-off", "sign_text": "Agent acknowledges and agrees to this action plan.", "initials": "Agent Initials",
-        "save_btn": "📥 SAVE SESSION TO DATABASE", "err_sign": "❌ Action Required: Agent must agree and provide initials.", "succ_save": "✅ Record successfully logged!",
-        "hist_ag": "👤 Coaching History for:", "db_team": "🏢 Full Team Database", "export_btn": "📥 Export Full DB", "db_mgmt": "🗑️ Database Management", "del_all": "🚨 Clear All History", "del_sel": "❌ Delete Selected", "sel_del": "Select record to delete:",
-        "email_gen": "✉️ Generate Official Coaching Log", "sel_sess": "Select Session Date to Email:", "prev_email": "👀 Email Preview", "send_btn": "✉️ Send via Outlook / Gmail",
-        "tt_red": "Results-oriented, decisive, fast-paced. Dislikes micromanagement.", "tt_yellow": "Sociable, enthusiastic. Needs recognition. Monitor AHT.", "tt_green": "Calm, patient. Dislikes pressure. Risk of burnout.", "tt_blue": "Analytical, precise. Requires data. Dislikes noise.",
-        "email_subject": "Official Coaching Session Log - {}",
-        "email_body": "Dear {},\n\nThank you for your time during our coaching session.\n\n[1. PERFORMANCE METRICS]\n- Target CSAT: {}% | Actual: {}%\n- Target QA: {}% | Actual: {}\n\n[2. ROOT CAUSE ANALYSIS]\n- Primary Root Cause: {}\n- Secondary Root Cause: {}\n\n[3. S.M.A.R.T. TARGETS & ACTION PLAN]\n- Specific: {}\n- Measurable: {}\n- Achievable: {}\n- Relevant: {}\n- Time-bound: {}\n- Official Action Plan: {}\n\nPlease reply to this email to acknowledge that you understand and agree with the action plan outlined above.\n\nBest regards,\n{}"
-    },
-    "Deutsch 🇩🇪": {
-        "title": "Nexus Pro | Performance & Coaching OS", "subtitle": "Leistungsmanagement & Personalentwicklung",
-        "team_mgmt": "👥 Meine Teamverwaltung", "add_agent": "Agenten hinzufügen", "add_btn": "➕ Hinzufügen", "sel_agent": "👤 Agenten auswählen", "rem_btn": "❌ Entfernen",
-        "settings": "🏢 Systemeinstellungen", "proj": "Projekt", "model": "Arbeitsmodell", "loc": "Standort", "date": "Datum", "duration": "Dauer",
-        "targets": "🎯 Unternehmensziele (KPIs)", "timer": "Sitzungs-Timer", "start": "▶ Start", "stop": "⏹ Stopp",
-        "hierarchy": "1. Führung & Management", "coach": "Coach / Team Leader", "qa_eval": "QA Bewerter",
-        "exp1": "2. Agentenprofil & Verhaltensanalytik", "avatar": "Profilbild", "male": "Mann", "female": "Frau", "upload": "Hochladen",
-        "name": "Name des Agenten", "email": "E-Mail", "tenure": "Erfahrung", "langs": "Sprachen",
-        "behavior": "Verhaltensprofil", "prim_p": "Primärer Typ", "sec_p": "Sekundärer Typ", "ai_insight": "🧠 AI Coaching-Tipp", "flight": "Kündigungsrisiko",
-        "exp2": "3. Qualitätsbewertung (QA)", "qa_score": "QA-Ergebnis (%)", "qa_notes": "QA Notizen",
-        "tab1": "KPI-Werte", "tab2": "Ursachenanalyse", "tab3": "S.M.A.R.T. & Aktionsplan", "tab4": "Anerkennung & Compliance", "tab5": "Verlauf & E-Mail",
-        "week": "Woche", "mtd_vs_tgt": "MTD vs Ziel", "chart_type": "Diagrammtyp",
-        "rc_ident": "Ursachenidentifikation", "add_why": "Warum hinzufügen", "pri_rc": "Hauptursache:", "sec_rc": "Sekundäre Ursache:", "def_rc": "Eigene Ursache definieren:",
-        "smart_title": "📝 S.M.A.R.T. Ziele", "s_s": "Spezifisch", "s_m": "Messbar", "s_a": "Erreichbar", "s_r": "Relevant", "s_t": "Terminiert",
-        "ap_title": "🛠️ Aktionsplan", "strat_ap": "Strategische Aktion:", "def_ap": "Eigene Aktion:", "deadline": "Frist:",
-        "kudos_title": "🏆 Anerkennung", "kudos_btn": "Lob generieren", "comp_title": "⚠️ Disziplinarmaßnahmen", "flag_out": "Disziplinarisch markieren", "comp_action": "Maßnahme",
-        "sign_title": "📝 Digitale Unterschrift", "sign_text": "Der Agent stimmt diesem Aktionsplan zu.", "initials": "Initialen",
-        "save_btn": "📥 SESSION SPEICHERN", "err_sign": "❌ Agent muss zustimmen und Initialen angeben.", "succ_save": "✅ Erfolgreich gespeichert!",
-        "hist_ag": "👤 Coaching-Verlauf für:", "db_team": "🏢 Gesamte Datenbank", "export_btn": "📥 CSV Exportieren", "db_mgmt": "🗑️ Datenbankverwaltung", "del_all": "🚨 Gesamten Verlauf löschen", "del_sel": "❌ Ausgewählte löschen", "sel_del": "Zu löschenden Datensatz wählen:",
-        "email_gen": "✉️ Offizielle E-Mail generieren", "sel_sess": "Sitzung für E-Mail auswählen:", "prev_email": "👀 Vorschau", "send_btn": "✉️ Senden via Outlook",
-        "tt_red": "Ergebnisorientiert, entscheidungsfreudig. Mag kein Mikromanagement.", "tt_yellow": "Kontaktfreudig, enthusiastisch. Braucht Anerkennung. AHT im Auge behalten.", "tt_green": "Ruhig, geduldig. Mag keinen Druck. Burnout-Risiko.", "tt_blue": "Analytisch, präzise. Benötigt Daten. Mag keinen Lärm.",
-        "email_subject": "Offizielles Coaching-Protokoll - {}",
-        "email_body": "Hallo {},\n\nvielen Dank für deine Zeit.\n\n[1. LEISTUNGSKENNZAHLEN]\n- Ziel CSAT: {}% | Aktuell: {}%\n- Ziel QA: {}% | Aktuell: {}\n\n[2. URSACHENANALYSE]\n- Hauptursache: {}\n- Sekundäre Ursache: {}\n\n[3. S.M.A.R.T. & AKTIONSPLAN]\n- Spezifisch: {}\n- Messbar: {}\n- Erreichbar: {}\n- Relevant: {}\n- Terminiert: {}\n- Aktionsplan: {}\n\nBitte antworte auf diese E-Mail, um den Plan zu bestätigen.\n\nBeste Grüße,\n{}"
-    },
-    "Svenska 🇸🇪": {
-        "title": "Nexus Pro | Performance & Coaching OS", "subtitle": "Verksamhetsstyrning & Personalutveckling",
-        "team_mgmt": "👥 Min Teamhantering", "add_agent": "Lägg till Agent", "add_btn": "➕ Lägg till", "sel_agent": "👤 Välj Agent", "rem_btn": "❌ Ta bort",
-        "settings": "🏢 Systeminställningar", "proj": "Projekt", "model": "Arbetsmodell", "loc": "Plats", "date": "Datum", "duration": "Varaktighet",
-        "targets": "🎯 Företagets Mål (KPI)", "timer": "Session Timer", "start": "▶ Start", "stop": "⏹ Stopp",
-        "hierarchy": "1. Ledarskap & Chefer", "coach": "Coach / Team Leader", "qa_eval": "QA Utvärderare",
-        "exp1": "2. Agentprofil & Beteendeanalys", "avatar": "Profilbild", "male": "Man", "female": "Kvinna", "upload": "Ladda upp",
-        "name": "Agentens Namn", "email": "E-post", "tenure": "Erfarenhet", "langs": "Språk",
-        "behavior": "Beteendeprofil", "prim_p": "Primär Personlighet", "sec_p": "Sekundär Personlighet", "ai_insight": "🧠 AI Coaching-tips", "flight": "Risk för uppsägning",
-        "exp2": "3. Kvalitetsutvärdering (QA)", "qa_score": "QA Resultat (%)", "qa_notes": "QA Anteckningar",
-        "tab1": "Prestationsmått", "tab2": "Grundorsaker", "tab3": "S.M.A.R.T. & Handlingsplan", "tab4": "Erkännande & Disciplin", "tab5": "Historik & E-post",
-        "week": "Vecka", "mtd_vs_tgt": "MTD vs Mål", "chart_type": "Diagramtyp",
-        "rc_ident": "Grundorsaksanalys", "add_why": "Lägg till Varför", "pri_rc": "Huvudorsak:", "sec_rc": "Sekundär orsak:", "def_rc": "Definiera Egen Orsak:",
-        "smart_title": "📝 S.M.A.R.T. Målsättning", "s_s": "Specifikt", "s_m": "Mätbart", "s_a": "Uppnåeligt", "s_r": "Relevant", "s_t": "Tidsbunden",
-        "ap_title": "🛠️ Handlingsplan", "strat_ap": "Strategisk Åtgärd:", "def_ap": "Egen Åtgärd:", "deadline": "Deadline:",
-        "kudos_title": "🏆 Erkännande", "kudos_btn": "Generera Beröm", "comp_title": "⚠️ Disciplinära åtgärder", "flag_out": "Markera för åtgärd", "comp_action": "Åtgärd",
-        "sign_title": "📝 Digital Signatur", "sign_text": "Agenten godkänner denna handlingsplan.", "initials": "Initialer",
-        "save_btn": "📥 SPARA SESSION", "err_sign": "❌ Agenten måste godkänna.", "succ_save": "✅ Sparad framgångsrikt!",
-        "hist_ag": "👤 Coachinghistorik för:", "db_team": "🏢 Hela Databasen", "export_btn": "📥 Exportera (CSV)", "db_mgmt": "🗑️ Databashantering", "del_all": "🚨 Rensa all historik", "del_sel": "❌ Ta bort vald", "sel_del": "Välj post att ta bort:",
-        "email_gen": "✉️ Skapa Officiellt E-post", "sel_sess": "Välj session för e-post:", "prev_email": "👀 Förhandsgranska", "send_btn": "✉️ Skicka via Outlook",
-        "tt_red": "Resultatinriktad, beslutsam, snabb. Ogillar detaljstyrning.", "tt_yellow": "Sällskaplig, entusiastisk. Behöver bekräftelse. Övervaka AHT.", "tt_green": "Lugn, tålmodig. Ogillar press. Risk för utbrändhet.", "tt_blue": "Analytisk, exakt. Kräver data. Ogillar oljud.",
-        "email_subject": "Officiell Coaching Logg - {}",
-        "email_body": "Hej {},\n\nTack för din tid idag.\n\n[1. PRESTATIONSMÅTT]\n- Mål CSAT: {}% | Aktuell: {}%\n- Mål QA: {}% | Aktuell: {}\n\n[2. GRUNDORSAK]\n- Huvudorsak: {}\n- Sekundär orsak: {}\n\n[3. S.M.A.R.T. & HANDLINGSPLAN]\n- Specifikt: {}\n- Mätbart: {}\n- Uppnåeligt: {}\n- Relevant: {}\n- Tidsbunden: {}\n- Åtgärd: {}\n\nVänligen svara på detta mejl för att bekräfta planen.\n\nVänliga hälsningar,\n{}"
+        "home_desc": "Create new teams or select an existing one.",
+        "create_team": "➕ New Team", "enter_team_sec": "🏢 Enter Team", "team_name_ph": "Name...", "create_btn": "Create", "enter_btn": "Enter Workspace", "select_team": "Select:",
+        "back_home": "🏠 Switch Team", "team_mgmt": "👥 Roster", "add_agent": "Add Agent", "add_btn": "➕", "sel_agent": "Active Agent", "rem_btn": "❌ Remove",
+        "ws_menu": ["📝 New Coaching", "🗂️ Agent History", "📈 KPI Review", "⚙️ Other Actions"],
+        "c_type_label": "Session Type:", "c_date_label": "Coaching Date:",
+        "ctype_case": "🎯 Specific Case / Interaction", "ctype_weekly": "📅 Weekly Coaching", "ctype_monthly": "📊 Monthly Review", "ctype_quarterly": "📈 Quarterly Review",
+        "call_id": "Call / Ticket Reference ID", "rebuttal": "Agent Self-Assessment / Rebuttal", "assign_lms": "📚 Assign LMS Micro-learning", "pip_gen": "⚠️ Generate P.I.P.",
+        "adherence": "⏱️ Adherence & Shrinkage Review", "extract_ag": "📥 Extract Agent Data (Excel)", "disc_action": "⚖️ Disciplinary Action",
+        "time_filter": "Time Filter", "tf_opts": ["Last Week", "Last Month", "Last Quarter", "Last Year"],
+        "tab1": "📊 1. Metrics & Data (KPIs)", "tab2": "🔍 Root Causes & 5 Whys", "tab3": "📝 S.M.A.R.T. & Action Plan", "tab4": "✍️ Sign-off & Self-Reflection",
+        "add_why": "Add Why", "rem_why": "Remove Why",
+        "save_btn": "📥 SAVE SESSION",
+        "ai_title": "🤖 Gemini AI Assistant", "ai_ph": "E.g. Give me 3 tips to improve AHT...", "ai_btn": "Send 🚀",
+        "chart_sel": "Chart Type:", "chart_opts": ["📉 Trend Line", "📊 Bar Chart", "🌊 Area Chart", "🥧 Pie Chart (Root Cause Dist.)"]
     }
 }
 
-# --- UI LANGUAGE SELECTION ---
-lang_choice = st.sidebar.selectbox("🌍 Language", ["English 🇬🇧", "Ελληνικά 🇬🇷", "Deutsch 🇩🇪", "Svenska 🇸🇪"])
-t = lang_dict[lang_choice]
-tt_text = f"🔴 Red: {t['tt_red']}\n\n🟡 Yellow: {t['tt_yellow']}\n\n🟢 Green: {t['tt_green']}\n\n🔵 Blue: {t['tt_blue']}"
+st.session_state['language'] = st.sidebar.selectbox("🌍 Language", ["English 🇬🇧", "Ελληνικά 🇬🇷"], index=["English 🇬🇧", "Ελληνικά 🇬🇷"].index(st.session_state['language']))
+t = lang_dict[st.session_state['language']]
 
-# --- SIDEBAR CONFIGURATION & MY TEAM ---
-st.sidebar.markdown("---")
-st.sidebar.subheader(t["team_mgmt"])
+# ==========================================
+# PAGE ROUTING LOGIC
+# ==========================================
 
-new_member = st.sidebar.text_input(t["add_agent"], placeholder="...")
-if st.sidebar.button(t["add_btn"]):
-    if new_member and new_member not in st.session_state['my_team']:
-        st.session_state['my_team'].append(new_member)
-        st.sidebar.success("OK!")
-
-active_agent = ""
-if st.session_state['my_team']:
-    active_agent = st.sidebar.selectbox(t["sel_agent"], st.session_state['my_team'])
-    if st.sidebar.button(t["rem_btn"]):
-        st.session_state['my_team'].remove(active_agent)
-        st.rerun()
-
-st.sidebar.markdown("---")
-st.sidebar.subheader(t["settings"])
-project = st.sidebar.selectbox(t["proj"], ["Booking.com", "Apple Support", "Google", "Netflix", "Customer Care"])
-work_model = st.sidebar.selectbox(t["model"], ["On-Site", "WFH (Remote)", "Hybrid"])
-site = st.sidebar.selectbox(t["loc"], ["Thessaloniki", "Athens", "Cairo", "Lisbon", "Barcelona", "Stockholm", "Berlin"])
-coaching_date = st.sidebar.date_input(t["date"], datetime.date.today())
-session_duration = st.sidebar.selectbox(t["duration"], ["15 mins", "30 mins", "45 mins", "60+ mins"])
-
-# --- MAIN UI ---
-st.title(t["title"])
-st.markdown(f"**{t['subtitle']}**")
-
-# --- CENTRAL TARGETS & LIVE TIMER (ME START & STOP) ---
-st.markdown(f"### 🎯 {t['targets']}")
-with st.container(border=True):
-    ct1, ct2, ct3, ct4 = st.columns(4)
-    with ct1: t_csat = st.number_input("Target CSAT %", 70.0, 100.0, 85.0)
-    with ct2: t_qa = st.number_input("Target QA %", 70.0, 100.0, 90.0)
-    with ct3: t_aht = st.number_input("Target AHT (sec)", value=280.0)
-    with ct4:
-        st.markdown(f"**{t['timer']}**")
-        components.html(f"""
-            <div style="font-family: Arial; font-size: 24px; font-weight: bold; color: #0083B0; text-align: center; border: 2px solid #0083B0; border-radius: 5px; padding: 5px;">
-                <span id="time">00:00</span>
-            </div>
-            <div style="display: flex; gap: 5px; margin-top: 5px;">
-                <button onclick="startTimer()" style="width: 50%; background-color: #4CAF50; color: white; border: none; padding: 5px; cursor: pointer; border-radius: 3px;">{t['start']}</button>
-                <button onclick="stopTimer()" style="width: 50%; background-color: #FF4B4B; color: white; border: none; padding: 5px; cursor: pointer; border-radius: 3px;">{t['stop']}</button>
-            </div>
-            <script>
-                let timerInterval; 
-                let seconds = 0;
-                function startTimer() {{
-                    clearInterval(timerInterval); // Αποτρέπει το διπλό interval αν πατηθεί 2 φορές
-                    timerInterval = setInterval(() => {{
-                        seconds++;
-                        let m = Math.floor(seconds / 60).toString().padStart(2, '0');
-                        let s = (seconds % 60).toString().padStart(2, '0');
-                        document.getElementById("time").innerText = m + ":" + s;
-                    }}, 1000);
-                }}
-                function stopTimer() {{
-                    clearInterval(timerInterval); // Σταματάει τον χρόνο χωρίς να τον μηδενίζει
-                }}
-            </script>
-        """, height=100)
-
-st.divider()
-
-if active_agent:
-    agent_past = [s for s in st.session_state['coaching_history'] if s['Agent'] == active_agent]
-    if agent_past:
-        last_action = agent_past[-1].get('Action Plan', '')
-        last_date = agent_past[-1].get('Date', '')
-        st.warning(f"🔄 **Follow-up:** ({last_date}) Action Plan: **'{last_action}'**.")
-
-# --- 1. LEADERSHIP ---
-st.subheader(t["hierarchy"])
-col_l1, col_l2 = st.columns(2)
-with col_l1: coach_name = st.text_input(t["coach"], "Ilias P.")
-with col_l2: qa_evaluator = st.text_input(t["qa_eval"], "Maria S.")
-
-# --- 2. AGENT PROFILE & AI MATRIX ---
-st.subheader(t["exp1"])
-c1, c2, c3 = st.columns([1, 2, 2])
-with c1: 
-    avatar = st.radio(t["avatar"], [t["male"], t["female"], t["upload"]], horizontal=True)
-    if avatar == t["female"]: st.image("https://www.w3schools.com/howto/img_avatar2.png", width=120)
-    elif avatar == t["upload"]:
-        img = st.file_uploader("", type=['png', 'jpg'])
-        if img: st.image(img, width=120)
-    else: st.image("https://www.w3schools.com/howto/img_avatar.png", width=120)
+if st.session_state['page'] == "Home":
     
-with c2:
-    agent_name = st.text_input(t["name"], value=active_agent)
-    work_email = st.text_input(t["email"], f"{agent_name.replace(' ', '.').lower()}@booking.com" if agent_name else "agent@booking.com")
-    tenure = st.selectbox(t["tenure"], ["0-6 Months (Rookie)", "6-12 Months (Developing)", "1-3 Years (Experienced)", "3+ Years (Veteran)"])
-    agent_lang = st.multiselect(t["langs"], ["Greek", "English", "German", "French", "Spanish", "Italian", "Swedish"], default=["English"])
+    components.html("""
+        <div style="display: flex; justify-content: center; align-items: center; height: 100px; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;">
+            <h1 style="color: #0083B0; font-size: 3.5rem; font-weight: bold; margin: 0;">
+                <span id="text"></span><span style="border-right: 3px solid #0083B0; animation: blink 0.7s infinite;">&nbsp;</span>
+            </h1>
+        </div>
+        <style> @keyframes blink { 50% { border-color: transparent; } } </style>
+        <script>
+            const words = ["Welcome", "Καλώς ήρθατε", "Bienvenidos", "Willkommen", "Bienvenue", "Välkommen"];
+            let i = 0; let timer;
+            function typingEffect() {
+                let word = words[i].split('');
+                var loopTyping = function() {
+                    if (word.length > 0) { document.getElementById('text').innerHTML += word.shift(); } 
+                    else { setTimeout(deletingEffect, 2000); return false; }
+                    timer = setTimeout(loopTyping, 120);
+                };
+                loopTyping();
+            }
+            function deletingEffect() {
+                let word = words[i].split('');
+                var loopDeleting = function() {
+                    if (word.length > 0) { word.pop(); document.getElementById('text').innerHTML = word.join(''); } 
+                    else { i = (i + 1) % words.length; setTimeout(typingEffect, 500); return false; }
+                    timer = setTimeout(loopDeleting, 60);
+                };
+                loopDeleting();
+            }
+            typingEffect();
+        </script>
+    """, height=120)
     
-with c3:
-    st.markdown(f"**{t['behavior']}**")
-    color_ops = ["Red (Director)", "Yellow (Inspirer)", "Green (Supporter)", "Blue (Analyst)"]
-    p_primary = st.selectbox(t["prim_p"], color_ops, help=tt_text)
-    p_secondary = st.selectbox(t["sec_p"], color_ops, index=1, help=tt_text)
+    st.markdown(f"<h4 style='text-align: center; color: gray;'>{t['home_desc']}</h4>", unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
     
-    def get_color(p):
-        if "Red" in p: return "#FF4B4B", "white"
-        if "Yellow" in p: return "#FFEB3B", "black"
-        if "Green" in p: return "#4CAF50", "white"
-        return "#0083B0", "white"
-    
-    c_hex_p, f_c_p = get_color(p_primary)
-    c_hex_s, f_c_s = get_color(p_secondary)
-    
-    st.markdown(f"""
-    <div style='display: flex; justify-content: space-between;'>
-        <div style='width: 48%; padding:10px; border-radius:10px; background-color:{c_hex_p}; color:{f_c_p}; text-align:center;'><b>Primary:</b><br>{p_primary}</div>
-        <div style='width: 48%; padding:10px; border-radius:10px; background-color:{c_hex_s}; color:{f_c_s}; text-align:center; opacity: 0.8;'><b>Secondary:</b><br>{p_secondary}</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-st.markdown("---")
-flight_risk = "🟢 Low Risk"
-if tenure in ["1-3 Years (Experienced)", "3+ Years (Veteran)"]: flight_risk = "🟡 Medium Risk"
-st.markdown(f"**{t['flight']}:** {flight_risk}")
-
-# --- 3. QA ---
-st.subheader(t["exp2"])
-qa1, qa2 = st.columns(2)
-with qa1: qa_score = st.number_input(t["qa_score"], value=82.0)
-with qa2: qa_notes = st.text_area(t["qa_notes"])
-
-# --- COACHING WORKFLOW TABS ---
-st.divider()
-tab1, tab2, tab3, tab4, tab5 = st.tabs([t["tab1"], t["tab2"], t["tab3"], t["tab4"], t["tab5"]])
-
-with tab1:
-    cols = st.columns(4)
-    w_data = {}
-    for i in range(1, 5):
-        with cols[i-1]:
-            st.markdown(f"**{t['week']} {i}**")
-            c = st.number_input(f"CSAT %", value=float(t_csat), key=f"c{i}")
-            q = st.number_input(f"QA %", value=float(t_qa), key=f"q{i}")
-            w_data[f"W{i}"] = [c, q]
-            
-    df = pd.DataFrame(w_data, index=["CSAT", "QA"])
-    df['MTD'] = df.mean(axis=1)
-    
-    st.markdown("---")
-    viz1, viz2 = st.columns([1, 2])
-    with viz1:
-        st.markdown(f"**{t['mtd_vs_tgt']}**")
-        st.metric("CSAT", f"{df.loc['CSAT', 'MTD']:.1f}%")
-        st.progress(min(int(df.loc['CSAT', 'MTD']), 100))
-        st.metric("QA", f"{df.loc['QA', 'MTD']:.1f}%")
-        st.progress(min(int(df.loc['QA', 'MTD']), 100))
-        
-    with viz2:
-        c_type = st.radio(t["chart_type"], ["Radar", "Bar", "Line", "Area"], horizontal=True)
-        if "Radar" in c_type:
-            fig = px.line_polar(df[['MTD']].reset_index(), r='MTD', theta='index', line_close=True)
-            fig.update_traces(fill='toself', line_color='#0083B0')
-        elif "Bar" in c_type: fig = px.bar(df.drop(columns='MTD').T, barmode='group')
-        elif "Line" in c_type: fig = px.line(df.drop(columns='MTD').T, markers=True)
-        else: fig = px.area(df.drop(columns='MTD').T)
-        st.plotly_chart(fig, use_container_width=True)
-
-with tab2:
-    st.markdown(f"**{t['tab2']}**")
-    for w in range(st.session_state['num_whys']):
-        st.text_input(f"Why {w+1}?", key=f"why_{w}")
-    
-    if st.session_state['num_whys'] < 5:
-        if st.button("➕ " + t["add_why"]):
-            st.session_state['num_whys'] += 1
-            st.rerun()
-            
-    st.markdown("---")
-    st.markdown(f"**{t['rc_ident']}**")
-    base_roots = list(rc_action_map.keys())
-    
-    c_rc1, c_rc2 = st.columns(2)
-    with c_rc1:
-        sel_pri_rc = st.selectbox(t["pri_rc"], ["-- Custom --"] + base_roots + st.session_state['custom_roots'])
-        fin_pri_rc = st.text_input(t["def_rc"], key="pri_rc_inp") if sel_pri_rc == "-- Custom --" else sel_pri_rc
-    with c_rc2:
-        sel_sec_rc = st.selectbox(t["sec_rc"], ["-- None --", "-- Custom --"] + base_roots + st.session_state['custom_roots'])
-        if sel_sec_rc == "-- Custom --":
-            fin_sec_rc = st.text_input(t["def_rc"], key="sec_rc_inp")
-        elif sel_sec_rc == "-- None --":
-            fin_sec_rc = "None"
-        else:
-            fin_sec_rc = sel_sec_rc
-
-with tab3:
-    st.markdown(f"**{t['smart_title']}**")
-    s1, s2 = st.columns(2)
-    with s1:
-        s_spec = st.text_input(t["s_s"])
-        s_meas = st.text_input(t["s_m"])
-        s_achi = st.text_input(t["s_a"])
-    with s2:
-        s_rele = st.text_input(t["s_r"])
-        s_time = st.text_input(t["s_t"])
-        
-    st.markdown("---")
-    st.markdown(f"**{t['ap_title']}**")
-    suggested_actions = rc_action_map.get(fin_pri_rc, [])
-    all_actions = ["-- Custom --"] + suggested_actions + st.session_state['custom_actions']
-    selected_action = st.selectbox(t["strat_ap"], all_actions)
-    final_action = st.text_input(t["def_ap"], key="fin_ap_inp") if selected_action == "-- Custom --" else selected_action
-    deadline = st.date_input(t["deadline"], datetime.date.today() + datetime.timedelta(days=14))
-
-with tab4:
-    st.markdown(f"### {t['kudos_title']}")
-    if st.button(t["kudos_btn"]): st.success(f"Great job, {agent_name}!")
-    
-    st.markdown("---")
-    st.markdown(f"### {t['comp_title']}")
-    is_outlier = st.toggle(t["flag_out"])
-    action_taken = st.selectbox(t["comp_action"], ["Verbal Warning", "Written Warning", "PIP"]) if is_outlier else "None"
-
-# --- DIGITAL SIGNATURE & SAVE ---
-st.divider()
-st.subheader(t["sign_title"])
-
-col_sig1, col_sig2 = st.columns(2)
-with col_sig1: agent_agrees = st.checkbox(t["sign_text"])
-with col_sig2: agent_initials = st.text_input(t["initials"], max_chars=3)
-
-if st.button("📥 " + t["save_btn"], use_container_width=True):
-    if not agent_agrees or not agent_initials:
-        st.error(t["err_sign"])
-    else:
-        if fin_pri_rc and fin_pri_rc != "-- Custom --" and fin_pri_rc not in base_roots and fin_pri_rc not in st.session_state['custom_roots']: st.session_state['custom_roots'].append(fin_pri_rc)
-        if fin_sec_rc and fin_sec_rc != "None" and fin_sec_rc != "-- Custom --" and fin_sec_rc not in base_roots and fin_sec_rc not in st.session_state['custom_roots']: st.session_state['custom_roots'].append(fin_sec_rc)
-        if final_action and final_action != "-- Custom --" and final_action not in rc_action_map.get(fin_pri_rc, []) and final_action not in st.session_state['custom_actions']: st.session_state['custom_actions'].append(final_action)
-
-        csat_mtd = round(df.loc['CSAT', 'MTD'], 1)
-        
-        session_data = {
-            "Date": str(coaching_date), "Agent": agent_name, "TL": coach_name, 
-            "Target CSAT": t_csat, "Target QA": t_qa, "CSAT": csat_mtd, "QA": f"{qa_score}%", 
-            "Primary Root Cause": fin_pri_rc, "Secondary Root Cause": fin_sec_rc, 
-            "Action Plan": final_action, 
-            "SMART_S": s_spec, "SMART_M": s_meas, "SMART_A": s_achi, "SMART_R": s_rele, "SMART_T": s_time,
-            "Signed": agent_initials
-        }
-        st.session_state['coaching_history'].append(session_data)
-        
-        st.session_state['num_whys'] = 1
-        st.success(t["succ_save"])
-
-# TAB 5: HISTORY, EXPORT, DELETE & EMAIL
-with tab5:
-    st.markdown(f"### {t['db_mgmt']}")
-    del1, del2 = st.columns(2)
-    with del1:
-        if st.button(t["del_all"]):
-            st.session_state['coaching_history'] = []
-            st.rerun()
-    with del2:
-        if len(st.session_state['coaching_history']) > 0:
-            del_opts = [f"{i}: {s['Date']} - {s['Agent']}" for i, s in enumerate(st.session_state['coaching_history'])]
-            sel_del = st.selectbox(t["sel_del"], del_opts)
-            if st.button(t["del_sel"]):
-                idx = int(sel_del.split(":")[0])
-                st.session_state['coaching_history'].pop(idx)
+    col_home1, col_home2 = st.columns(2)
+    with col_home1:
+        with st.container(border=True):
+            st.subheader(t["create_team"])
+            new_team_input = st.text_input("", placeholder=t["team_name_ph"])
+            if st.button(t["create_btn"], type="primary") and new_team_input and new_team_input not in st.session_state['teams']:
+                st.session_state['teams'][new_team_input] = [] 
+                st.session_state['active_team'] = new_team_input
+                st.session_state['page'] = "Workspace"
                 st.rerun()
-                
-    st.markdown("---")
+    with col_home2:
+        with st.container(border=True):
+            st.subheader(t["enter_team_sec"])
+            team_options = list(st.session_state['teams'].keys())
+            if team_options:
+                selected_team = st.selectbox(t["select_team"], team_options)
+                if st.button(t["enter_btn"]):
+                    st.session_state['active_team'] = selected_team
+                    st.session_state['page'] = "Workspace"
+                    st.rerun()
 
-    if len(st.session_state['coaching_history']) > 0:
-        h_df = pd.DataFrame(st.session_state['coaching_history'])
+else:
+    active_team = st.session_state['active_team']
+    team_members = st.session_state['teams'][active_team]
+    
+    st.sidebar.markdown("---")
+    if st.sidebar.button(t["back_home"], use_container_width=True):
+        st.session_state['active_team'] = None
+        st.session_state['page'] = "Home"
+        st.rerun()
         
-        st.markdown(f"### {t['hist_ag']} {agent_name}")
-        agent_df = h_df[h_df['Agent'] == agent_name]
-        if not agent_df.empty:
-            st.dataframe(agent_df, use_container_width=True)
-            
-            st.markdown("---")
-            st.markdown(f"### {t['email_gen']}")
-            
-            session_options = agent_df['Date'].tolist()
-            selected_session_date = st.selectbox(t["sel_sess"], reversed(session_options))
-            sel_session = agent_df[agent_df['Date'] == selected_session_date].iloc[-1]
-            
-            subject = t["email_subject"].format(sel_session['Date'])
-            body = t["email_body"].format(
-                sel_session.get('Agent', agent_name), 
-                sel_session.get('Target CSAT', t_csat), sel_session.get('CSAT', '-'), 
-                sel_session.get('Target QA', t_qa), sel_session.get('QA', '-'), 
-                sel_session.get('Primary Root Cause', sel_session.get('Root Cause', '-')), 
-                sel_session.get('Secondary Root Cause', 'None'),
-                sel_session.get('SMART_S', '-'), sel_session.get('SMART_M', '-'), sel_session.get('SMART_A', '-'), sel_session.get('SMART_R', '-'), sel_session.get('SMART_T', '-'),
-                sel_session.get('Action Plan', '-'), sel_session.get('TL', coach_name)
-            )
-            mailto_link = f"mailto:{work_email}?subject={urllib.parse.quote(subject)}&body={urllib.parse.quote(body)}"
-            
-            st.markdown(f"<a href='{mailto_link}' target='_blank'><button style='background-color:#0083B0; color:white; padding:10px 24px; border:none; border-radius:4px; cursor:pointer;'>{t['send_btn']}</button></a>", unsafe_allow_html=True)
-            
-            with st.expander(t["prev_email"], expanded=False):
-                st.text(body)
-                
+    st.sidebar.markdown(f"### 📍 Team: **{active_team}**")
+    st.sidebar.markdown("---")
+    
+    # Roster Management
+    new_member = st.sidebar.text_input(t["add_agent"], placeholder="Agent Name...")
+    if st.sidebar.button(t["add_btn"]):
+        if new_member and new_member not in team_members:
+            st.session_state['teams'][active_team].append(new_member)
+            st.rerun()
+
+    active_agent = ""
+    if team_members:
+        active_agent = st.sidebar.selectbox(t["sel_agent"], team_members)
+        if st.sidebar.button(t["rem_btn"]):
+            st.session_state['teams'][active_team].remove(active_agent)
+            st.rerun()
+
+    st.sidebar.markdown("---")
+    with st.sidebar.expander("🤖 AI API Setup", expanded=False):
+        if not GEMINI_AVAILABLE:
+            st.error("Missing library! Run: `pip install google-generativeai`")
+        api_key = st.text_input("Gemini API Key:", type="password", value=st.session_state['gemini_api_key'], help="Get it free from Google AI Studio")
+        if st.button("Save Key"):
+            st.session_state['gemini_api_key'] = api_key
+            st.success("Key Saved!")
+
+    # ------------------------------------------
+    # ΚΥΡΙΩΣ ΟΘΟΝΗ: TEAM WORKSPACE
+    # ------------------------------------------
+    if st.session_state['page'] == "Workspace":
+        st.title(f"Nexus Pro | {active_agent if active_agent else 'Workspace'}")
+        
+        if not active_agent:
+            st.info("👈 Please add and select an Agent from the sidebar to open the Workspace.")
         else:
-            st.info(f"No records found for {agent_name}.")
-            
-        st.markdown("---")
-        st.markdown(f"### {t['db_team']}")
-        
-        col_ex1, col_ex2 = st.columns(2)
-        with col_ex1:
-            csv = h_df.to_csv(index=False).encode('utf-8-sig')
-            st.download_button(label=t["export_btn"], data=csv, file_name=f"Nexus_Full_Export_{datetime.date.today()}.csv", mime="text/csv")
-            
-    else:
-        st.info("No historical data found. Complete and save a session.")
+            ws_action = st.radio("", t["ws_menu"], horizontal=True, label_visibility="collapsed")
+            st.divider()
 
-st.divider()
-st.markdown("<p style='text-align: center; color: gray; font-size: 12px;'>Corporate Performance Management System | v24.2 Ultimate Edition</p>", unsafe_allow_html=True)
+            agent_history = [s for s in st.session_state['coaching_history'] if s['Agent'] == active_agent and s.get('Team') == active_team]
+
+            # --- ΥΠΟ-ΟΘΟΝΗ 1: ΝΕΟ COACHING ---
+            if ws_action == t["ws_menu"][0]:
+                
+                # --- COACHING TYPE & CALENDAR ---
+                st.markdown("### 🗓️ Session Details")
+                with st.container(border=True):
+                    c_date, c_type = st.columns(2)
+                    with c_date:
+                        coaching_date = st.date_input(t["c_date_label"], datetime.date.today())
+                    with c_type:
+                        coaching_type = st.selectbox(t["c_type_label"], [t["ctype_case"], t["ctype_weekly"], t["ctype_monthly"], t["ctype_quarterly"]])
+                
+                st.markdown("<br>", unsafe_allow_html=True)
+                
+                col_form, col_ai = st.columns([7, 3])
+                
+                with col_form:
+                    # HIDE KPIs IF IT'S JUST A SPECIFIC CASE COACHING
+                    has_kpis = coaching_type != t["ctype_case"]
+                    df = pd.DataFrame(index=["CSAT", "QA"]) # Default empty df
+                    df['MTD'] = 0.0
+                    
+                    if has_kpis:
+                        with st.expander(t["tab1"], expanded=True):
+                            c_id, c_csat, c_qa, c_aht = st.columns(4)
+                            with c_id: call_ref = st.text_input(t["call_id"], placeholder="e.g. INC-10293")
+                            with c_csat: t_csat = st.number_input("Target CSAT %", 70.0, 100.0, 85.0)
+                            with c_qa: t_qa = st.number_input("Target QA %", 70.0, 100.0, 90.0)
+                            with c_aht: t_aht = st.number_input("Target AHT (sec)", value=280.0)
+                            
+                            st.markdown("---")
+                            w_data = {}
+                            w_cols = st.columns(4)
+                            for i in range(1, 5):
+                                with w_cols[i-1]:
+                                    st.markdown(f"**Week {i}**")
+                                    c = st.number_input(f"CSAT %", value=float(t_csat), key=f"c{i}")
+                                    q = st.number_input(f"QA %", value=float(t_qa), key=f"q{i}")
+                                    w_data[f"W{i}"] = [c, q]
+                            
+                            df = pd.DataFrame(w_data, index=["CSAT", "QA"])
+                            df['MTD'] = df.mean(axis=1)
+                    else:
+                        call_ref = st.text_input(t["call_id"], placeholder="e.g. Interaction ID")
+
+                    with st.expander(t["tab2"], expanded=not has_kpis): # Expand by default if KPIs are hidden
+                        for w in range(st.session_state['num_whys']):
+                            st.text_input(f"Why {w+1}?", key=f"why_{w}")
+                            
+                        # Προσθήκη / Αφαίρεση Why Κουμπιά
+                        btn_w1, btn_w2, _ = st.columns([2, 2, 6])
+                        with btn_w1:
+                            if st.session_state['num_whys'] < 5:
+                                if st.button("➕ " + t["add_why"], use_container_width=True): 
+                                    st.session_state['num_whys'] += 1; st.rerun()
+                        with btn_w2:
+                            if st.session_state['num_whys'] > 1:
+                                if st.button("➖ " + t["rem_why"], use_container_width=True): 
+                                    st.session_state['num_whys'] -= 1; st.rerun()
+                        
+                        st.markdown("---")
+                        base_roots = list(rc_action_map.keys())
+                        c_rc1, c_rc2 = st.columns(2)
+                        with c_rc1:
+                            sel_pri_rc = st.selectbox("Primary Root Cause:", ["-- Custom --"] + base_roots + st.session_state['custom_roots'])
+                            fin_pri_rc = st.text_input("Define Custom Primary:", key="pri_rc_inp") if sel_pri_rc == "-- Custom --" else sel_pri_rc
+                        with c_rc2:
+                            sel_sec_rc = st.selectbox("Secondary Root Cause:", ["-- None --", "-- Custom --"] + base_roots + st.session_state['custom_roots'])
+                            fin_sec_rc = st.text_input("Define Custom Secondary:", key="sec_rc_inp") if sel_sec_rc == "-- Custom --" else (sel_sec_rc if sel_sec_rc != "-- None --" else "None")
+
+                    with st.expander(t["tab3"]):
+                        s1, s2 = st.columns(2)
+                        with s1: 
+                            sel_s = st.selectbox("Specific:", opt_specific)
+                            fin_s = st.text_input("Define Custom Specific:", key="s_cust") if sel_s == "-- Custom --" else sel_s
+                            
+                            sel_m = st.selectbox("Measurable:", opt_measurable)
+                            fin_m = st.text_input("Define Custom Measurable:", key="m_cust") if sel_m == "-- Custom --" else sel_m
+                            
+                            sel_a = st.selectbox("Achievable:", opt_achievable)
+                            fin_a = st.text_input("Define Custom Achievable:", key="a_cust") if sel_a == "-- Custom --" else sel_a
+                            
+                        with s2: 
+                            sel_r = st.selectbox("Relevant:", opt_relevant)
+                            fin_r = st.text_input("Define Custom Relevant:", key="r_cust") if sel_r == "-- Custom --" else sel_r
+                            
+                            sel_t = st.selectbox("Time-bound:", opt_timebound)
+                            fin_t = st.text_input("Define Custom Time-bound:", key="t_cust") if sel_t == "-- Custom --" else sel_t
+                        
+                        st.markdown("---")
+                        suggested_actions = rc_action_map.get(fin_pri_rc, [])
+                        selected_action = st.selectbox("Strategic Action Plan:", ["-- Custom --"] + suggested_actions + st.session_state['custom_actions'])
+                        final_action = st.text_input("Define Custom Action Plan:", key="fin_ap_inp") if selected_action == "-- Custom --" else selected_action
+
+                    with st.expander(t["tab4"]):
+                        agent_rebuttal = st.text_area(t["rebuttal"], placeholder="Agent's perspective or agreement notes...")
+                        st.markdown("---")
+                        col_sig1, col_sig2 = st.columns(2)
+                        with col_sig1: agent_agrees = st.checkbox("Agent acknowledges and agrees.")
+                        with col_sig2: agent_initials = st.text_input("Agent Initials", max_chars=3)
+
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    if st.button("📥 " + t["save_btn"], use_container_width=True, type="primary"):
+                        if not agent_agrees or not agent_initials:
+                            st.error("❌ Action Required: Agent must agree and provide initials.")
+                        else:
+                            if fin_pri_rc and fin_pri_rc != "-- Custom --" and fin_pri_rc not in base_roots and fin_pri_rc not in st.session_state['custom_roots']: st.session_state['custom_roots'].append(fin_pri_rc)
+                            if final_action and final_action != "-- Custom --" and final_action not in rc_action_map.get(fin_pri_rc, []) and final_action not in st.session_state['custom_actions']: st.session_state['custom_actions'].append(final_action)
+                            
+                            session_data = {
+                                "Date": str(coaching_date), "Type": coaching_type, "Team": active_team, "Agent": active_agent,
+                                "Call ID": call_ref, 
+                                "CSAT": round(df.loc['CSAT', 'MTD'], 1) if has_kpis else None, 
+                                "QA": round(df.loc['QA', 'MTD'], 1) if has_kpis else None,
+                                "Primary Root Cause": fin_pri_rc, "Action Plan": final_action, 
+                                "SMART_S": fin_s, "SMART_M": fin_m, "SMART_A": fin_a, "SMART_R": fin_r, "SMART_T": fin_t,
+                                "Agent Notes": agent_rebuttal, "Signed": agent_initials
+                            }
+                            st.session_state['coaching_history'].append(session_data)
+                            st.session_state['num_whys'] = 1
+                            st.success("✅ Record successfully logged!")
+
+                # --- ΔΕΞΙΑ ΣΤΗΛΗ: AI ASSISTANT PANEL ---
+                with col_ai:
+                    with st.container(border=True):
+                        st.markdown(f"### {t['ai_title']}")
+                        
+                        chat_container = st.container(height=400)
+                        with chat_container:
+                            if not st.session_state['ai_chat_history']:
+                                st.info("Hello! Ask me to generate an action plan, summarize KPIs, or roleplay a scenario.")
+                            for msg in st.session_state['ai_chat_history']:
+                                role = "🧑‍💼" if msg['role'] == "user" else "🤖"
+                                st.markdown(f"**{role}:** {msg['content']}")
+                        
+                        user_prompt = st.text_input("", placeholder=t["ai_ph"], key="ai_input")
+                        if st.button(t["ai_btn"], use_container_width=True):
+                            if user_prompt:
+                                st.session_state['ai_chat_history'].append({"role": "user", "content": user_prompt})
+                                
+                                if st.session_state['gemini_api_key'] and GEMINI_AVAILABLE:
+                                    try:
+                                        genai.configure(api_key=st.session_state['gemini_api_key'])
+                                        model = genai.GenerativeModel('gemini-1.5-flash')
+                                        context_prompt = f"Act as an expert BPO Team Leader. You are helping coach an agent named {active_agent}. Keep your answer professional, concise, and formatting-rich. Here is the query: {user_prompt}"
+                                        response = model.generate_content(context_prompt)
+                                        ai_response = response.text
+                                    except Exception as e:
+                                        ai_response = f"❌ API Error: {e}. Check if your API Key is valid."
+                                else:
+                                    ai_response = "⚠️ No API Key found! Please paste your Google Gemini API Key in the Sidebar (AI API Setup) to enable real responses."
+                                
+                                st.session_state['ai_chat_history'].append({"role": "ai", "content": ai_response})
+                                st.rerun() 
+
+            # --- ΥΠΟ-ΟΘΟΝΗ 2: COACHING HISTORY ---
+            elif ws_action == t["ws_menu"][1]:
+                st.subheader(f"🗂️ History: {active_agent}")
+                if len(agent_history) > 0:
+                    h_df = pd.DataFrame(agent_history)
+                    
+                    # --- FIX: Backward Compatibility για παλιά δεδομένα ---
+                    if 'Type' not in h_df.columns:
+                        h_df['Type'] = "Legacy Record"
+                    if 'Date' not in h_df.columns:
+                        h_df['Date'] = "Unknown Date"
+                    # ------------------------------------------------------
+                        
+                    # Reorder columns safely
+                    cols = ['Date', 'Type'] + [c for c in h_df.columns if c not in ['Date', 'Type']]
+                    st.dataframe(h_df[cols], use_container_width=True)
+                    
+                    st.markdown("### Edit / Delete Records")
+                    col_ed1, col_ed2 = st.columns(2)
+                    with col_ed1:
+                        # Χρήση του .get() για ασφάλεια σε περίπτωση που λείπουν πεδία από παλιές εγγραφές
+                        del_opts = [f"{st.session_state['coaching_history'].index(s)}: {s.get('Date', 'No Date')} ({s.get('Type', 'Legacy')}) - {s.get('Primary Root Cause', '')}" for s in agent_history]
+                        sel_record = st.selectbox("Select Record:", del_opts)
+                        idx_to_mod = int(sel_record.split(":")[0])
+                        
+                    with col_ed2:
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        if st.button("❌ Delete Record", type="primary"):
+                            st.session_state['coaching_history'].pop(idx_to_mod)
+                            st.rerun()
+                            
+                    with st.expander("✏️ Quick Edit Action Plan"):
+                        new_action = st.text_input("Update Action Plan:", value=st.session_state['coaching_history'][idx_to_mod].get('Action Plan', ''))
+                        if st.button("Update"):
+                            st.session_state['coaching_history'][idx_to_mod]['Action Plan'] = new_action
+                            st.success("Updated!")
+                            st.rerun()
+                else:
+                    st.info("No historical data found for this agent.")
+
+            # --- ΥΠΟ-ΟΘΟΝΗ 3: KPI REVIEW (ΜΕ ΕΠΙΛΟΓΗ ΓΡΑΦΗΜΑΤΟΣ & TIME FILTERS) ---
+            elif ws_action == t["ws_menu"][2]:
+                st.subheader("📈 KPI Performance Review")
+                if len(agent_history) > 0:
+                    c_f1, c_f2 = st.columns(2)
+                    with c_f1:
+                        time_f = st.radio(t["time_filter"], t["tf_opts"], horizontal=True)
+                    with c_f2:
+                        chart_type = st.selectbox(t["chart_sel"], t["chart_opts"])
+                    
+                    hist_df = pd.DataFrame(agent_history)
+                    
+                    # --- FIX: Ασφαλής μετατροπή ημερομηνιών για αποφυγή σφαλμάτων ---
+                    hist_df['Date'] = pd.to_datetime(hist_df['Date'], errors='coerce').dt.date
+                    hist_df = hist_df.dropna(subset=['Date']) # Διαγραφή εγγραφών με μη-έγκυρη ημερομηνία μόνο για το γράφημα
+                    # ----------------------------------------------------------------
+                    
+                    today = datetime.date.today()
+                    if time_f == t["tf_opts"][0]: # Last Week
+                        cutoff_date = today - datetime.timedelta(days=7)
+                    elif time_f == t["tf_opts"][1]: # Last Month
+                        cutoff_date = today - datetime.timedelta(days=30)
+                    elif time_f == t["tf_opts"][2]: # Last Quarter
+                        cutoff_date = today - datetime.timedelta(days=90)
+                    else: # Last Year
+                        cutoff_date = today - datetime.timedelta(days=365)
+                        
+                    filtered_df = hist_df[hist_df['Date'] >= cutoff_date]
+                    filtered_df = filtered_df.sort_values('Date')
+                    
+                    st.markdown("---")
+                    
+                    if filtered_df.empty:
+                        st.warning(f"No coaching data found for the selected period ({time_f}).")
+                    else:
+                        if "Pie" in chart_type:
+                            pie_data = filtered_df['Primary Root Cause'].value_counts().reset_index()
+                            pie_data.columns = ['Root Cause', 'Count']
+                            fig = px.pie(pie_data, names='Root Cause', values='Count', title=f"Root Cause Distribution ({time_f})", hole=0.4)
+                            st.plotly_chart(fig, use_container_width=True)
+                        else:
+                            kpi_df = filtered_df.dropna(subset=['CSAT', 'QA'])
+                            
+                            if kpi_df.empty:
+                                st.info("No KPI data available for this period (Only Case/Behavioral coaching found).")
+                            else:
+                                if "Trend" in chart_type:
+                                    fig = px.line(kpi_df, x='Date', y=['CSAT', 'QA'], markers=True, title=f"Performance Trend ({time_f})")
+                                elif "Bar" in chart_type:
+                                    fig = px.bar(kpi_df, x='Date', y=['CSAT', 'QA'], barmode='group', title=f"Performance Comparison ({time_f})")
+                                elif "Area" in chart_type:
+                                    fig = px.area(kpi_df, x='Date', y=['CSAT', 'QA'], title=f"Performance Area ({time_f})")
+                                
+                                fig.update_layout(yaxis_title="Score %", xaxis_title="Session Date")
+                                st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("Complete some coaching sessions first to unlock KPI Trends.")
+
+            # --- ΥΠΟ-ΟΘΟΝΗ 4: OTHER ACTIONS ---
+            elif ws_action == t["ws_menu"][3]:
+                st.subheader("⚙️ Agent Management & Tools")
+                
+                c_o1, c_o2 = st.columns(2)
+                with c_o1:
+                    with st.container(border=True):
+                        st.markdown(f"**{t['assign_lms']}**")
+                        lms_module = st.selectbox("Select Module:", ["Empathy 101", "De-escalation Tactics", "System Navigation", "Security Compliance"])
+                        if st.button("Send Assignment"): st.success(f"Assigned {lms_module} to {active_agent}")
+                        
+                    with st.container(border=True):
+                        st.markdown(f"**{t['adherence']}**")
+                        st.metric("Schedule Adherence (MTD)", "94.2%", "-1.8%")
+                        st.metric("Shrinkage (MTD)", "12.5%", "+0.5%")
+                        
+                with c_o2:
+                    with st.container(border=True):
+                        st.markdown(f"**{t['pip_gen']}**")
+                        pip_reason = st.text_input("Reason for P.I.P:")
+                        if st.button("Generate P.I.P. PDF"): st.info("PDF Generation triggered. Check downloads.")
+                        
+                    with st.container(border=True):
+                        st.markdown(f"**{t['disc_action']}**")
+                        disc_lvl = st.selectbox("Action Level:", ["Verbal Warning", "Written Warning", "Final Warning"])
+                        if st.button("Log Disciplinary"): st.warning(f"{disc_lvl} logged for {active_agent}.")
+                        
+                if st.button(t["extract_ag"], use_container_width=True):
+                    if len(agent_history) > 0:
+                        csv = pd.DataFrame(agent_history).to_csv(index=False).encode('utf-8-sig')
+                        st.download_button("Download Now", data=csv, file_name=f"{active_agent}_Data.csv", mime="text/csv")
+                    else:
+                        st.error("No data to extract.")
